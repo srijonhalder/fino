@@ -1,0 +1,20 @@
+node_modules/
+.env
+__pycache__/
+*.pyc
+.DS_Store
+dist/
+build/
+.vscode/
+*.log
+
+# Backend
+backend/uploads/selfies/*
+!backend/uploads/selfies/.gitkeep
+
+# Hardhat
+smart-contracts/cache/
+smart-contracts/artifacts/
+
+# Rust/Soroban build artifacts
+smart-contracts/soroban-contracts/target/
