@@ -1,0 +1,28 @@
+{
+  "name": "smart-contracts",
+  "version": "1.0.0",
+  "description": "Fino smart contracts",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "test:ci": "npm run compile",
+    "deploy": "hardhat run scripts/deploy.js --network stellarTestnet",
+    "deploy:stellar": "node scripts/deployStellarContracts.js all",
+    "deploy:stellar:token": "node scripts/deployStellarContracts.js token",
+    "deploy:stellar:dividend": "node scripts/deployStellarContracts.js dividend",
+    "soroban:build": "soroban contract build --manifest-path soroban-contracts/token-contract/Cargo.toml",
+    "soroban:deploy": "soroban contract deploy --source admin --network testnet --wasm ./target/wasm32-unknown-unknown/release/invx_token_contract.wasm"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "hardhat": "^2.22.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.4.0",
+    "dotenv": "^16.4.0",
+    "stellar-sdk": "^12.0.0"
+  }
+}

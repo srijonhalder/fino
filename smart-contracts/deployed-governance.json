@@ -1,0 +1,14 @@
+{
+  "network": "celoSepolia",
+  "chainId": 11142220,
+  "deployer": "0x1111ca98D5a4E81fc691A5E023DD32795fd3F7Fc",
+  "deployedAt": "2026-03-04T15:57:36.122Z",
+  "contracts": {
+    "INVXToken": "0xdad5C02afEdCbb38CD24FbbD562dD88a4FeAda79",
+    "RewardDistributor": "0x436F6AE53180E8Df0BCb42731aDb395513DC08C0",
+    "DocumentRegistry": "0x4d9aF0c4E95449dCB0407939bCA8258b8Cb0AcD6",
+    "FinoGovernance": "0x9043740630C1f706AF6115507F6B9e4b5930b517",
+    "DividendDistributor": "0x0A457F41d952574066e3146580B36722643E6812"
+  },
+  "dividendDistributorDeployedAt": "2026-03-04T15:58:11.186Z"
+}
