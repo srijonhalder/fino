@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: fino-backend
+    env: node
+    rootDir: backend
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: FRONTEND_URL
+        value: https://fino-srijon.vercel.app
+      - key: STELLAR_HORIZON_URL
+        value: https://horizon-testnet.stellar.org
+      - key: STELLAR_RPC_URL
+        value: https://soroban-testnet.stellar.org:443
+      - key: STELLAR_ADMIN_SECRET
+        sync: false
+      - key: ADMIN_WALLET_PRIVATE_KEY
+        sync: false
+      - key: INVX_TOKEN_CONTRACT_ID
+        sync: false
+      - key: BUSINESS_TOKEN_CONTRACT_ID
+        sync: false
+      - key: ESCROW_CONTRACT_ID
+        sync: false
+      - key: ESCROW_CONTRACT_ADDRESS
+        sync: false
+      - key: DIVIDEND_CONTRACT_ID
+        sync: false
+      - key: DOCUMENT_REGISTRY_ID
+        sync: false
+      - key: GOVERNANCE_CONTRACT_ID
+        sync: false
+      - key: REWARD_DISTRIBUTOR_ID
+        sync: false
