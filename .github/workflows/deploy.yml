@@ -1,0 +1,256 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+  # Manual trigger. Ticking "deploy_contracts" is the ONLY way to actually
+  # (re)deploy the Soroban contracts — that mints brand-new addresses and wipes
+  # on-chain state, so it must never happen automatically on a push.
+  workflow_dispatch:
+    inputs:
+      deploy_contracts:
+        description: 'Redeploy smart contracts (mints NEW addresses!)'
+        type: boolean
+        default: false
+
+# One deploy at a time; cancel an in-progress deploy if a newer push lands.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+# Known live testnet deployment. Public contract IDs — safe to embed.
+# Repository variables (vars.*) override them when present.
+env:
+  BUSINESS_TOKEN_CONTRACT_ID: ${{ vars.BUSINESS_TOKEN_CONTRACT_ID || 'CCGD5P3SCFVBQHQJFG5YEHSDTGZQ27UFUTRGMM5FWT3FFMQ37QA2WIWM' }}
+  ESCROW_CONTRACT_ID: ${{ vars.ESCROW_CONTRACT_ID || 'CDQJFA7FWAFENCOBGYI5YTEIIIV2JWYWGPKMFTSKZCS3GVSVPSVDULXU' }}
+  DIVIDEND_CONTRACT_ID: ${{ vars.DIVIDEND_CONTRACT_ID || 'CDH35PFTCU2WXPQ3LW4NFDJADNCEKK7RNH2UUNH5JRKFZ7O7U3UCFY6C' }}
+  DOCUMENT_REGISTRY_ID: ${{ vars.DOCUMENT_REGISTRY_ID || 'CAZZHGGQCK4XYSWQOY7NPSU247XMWA4PNJWUA6NU47TPQFK4E6EGVYZZ' }}
+  GOVERNANCE_CONTRACT_ID: ${{ vars.GOVERNANCE_CONTRACT_ID || 'CCIMHOZAMXQXJRJJXAMBX2GXSGP6BCU7YRLYTJ5IJ446XEJYEW56UBAH' }}
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Job 1 — Smart contracts (build WASM + deploy to testnet)
+  # ──────────────────────────────────────────────
+  deploy-contract:
+    name: Deploy Smart Contracts
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: smart-contracts/soroban-contracts
+    outputs:
+      business_token_id: ${{ steps.ids.outputs.business_token_id }}
+      escrow_id: ${{ steps.ids.outputs.escrow_id }}
+      dividend_id: ${{ steps.ids.outputs.dividend_id }}
+      document_registry_id: ${{ steps.ids.outputs.document_registry_id }}
+      governance_id: ${{ steps.ids.outputs.governance_id }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Pinned to 1.95.0: newer stable fails to compile ethnum 1.5.2 (E0512).
+      - name: Install Rust 1.95.0 toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            smart-contracts/soroban-contracts/target
+          key: ${{ runner.os }}-cargo-deploy-${{ hashFiles('smart-contracts/soroban-contracts/Cargo.lock') }}
+
+      - name: Build WASM artifacts
+        run: cargo build --target wasm32-unknown-unknown --release
+
+      # Real (re)deploy — only on manual dispatch with the checkbox ticked.
+      - name: Install Stellar CLI
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_contracts }}
+        run: cargo install --locked stellar-cli --features opt
+
+      - name: Deploy contracts to Stellar testnet
+        id: ids
+        env:
+          STELLAR_SECRET_KEY: ${{ secrets.STELLAR_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          echo "▶ Deploying Soroban contracts to Stellar testnet…"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.deploy_contracts }}" = "true" ]; then
+            echo "  Mode: FRESH DEPLOY (manual dispatch) — minting new contract addresses"
+            stellar keys add deployer --secret-key <<< "$STELLAR_SECRET_KEY"
+            deploy() { stellar contract deploy --wasm "target/wasm32-unknown-unknown/release/$1.wasm" --source deployer --network testnet; }
+            BT=$(deploy business_token_contract)
+            ES=$(deploy escrow_contract)
+            DV=$(deploy dividend_distributor_contract)
+            DR=$(deploy document_registry_contract)
+            GV=$(deploy governance_contract)
+          else
+            echo "  Mode: PUSH — contracts already live on testnet, reusing existing deployment."
+            echo "  (A fresh redeploy mints NEW addresses + wipes on-chain state; run it"
+            echo "   manually via 'Run workflow' → tick 'Redeploy smart contracts'.)"
+            BT="$BUSINESS_TOKEN_CONTRACT_ID"; ES="$ESCROW_CONTRACT_ID"; DV="$DIVIDEND_CONTRACT_ID"
+            DR="$DOCUMENT_REGISTRY_ID"; GV="$GOVERNANCE_CONTRACT_ID"
+          fi
+
+          echo "business_token_id=$BT"    >> "$GITHUB_OUTPUT"
+          echo "escrow_id=$ES"            >> "$GITHUB_OUTPUT"
+          echo "dividend_id=$DV"          >> "$GITHUB_OUTPUT"
+          echo "document_registry_id=$DR" >> "$GITHUB_OUTPUT"
+          echo "governance_id=$GV"        >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "✅ Contract deployment complete — addresses on Stellar testnet:"
+          echo "   business_token:    $BT"
+          echo "   escrow:            $ES"
+          echo "   dividend:          $DV"
+          echo "   document_registry: $DR"
+          echo "   governance:        $GV"
+
+      - name: Upload WASM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-wasms
+          path: smart-contracts/soroban-contracts/target/wasm32-unknown-unknown/release/*.wasm
+          retention-days: 7
+
+  # ──────────────────────────────────────────────
+  # Job 2 — Backend (install + deploy to Render)
+  # ──────────────────────────────────────────────
+  deploy-backend:
+    name: Deploy Backend (Render)
+    runs-on: ubuntu-latest
+    needs: [deploy-contract]
+    if: ${{ !failure() && !cancelled() }}
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Smoke-compile server (syntax check)
+        run: node --check server.js
+
+      - name: Trigger Render deploy
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -n "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "▶ Triggering Render deploy…"
+            code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$RENDER_DEPLOY_HOOK_URL")
+            echo "Render deploy hook responded: HTTP $code"
+            [ "$code" = "200" ] || [ "$code" = "201" ] || { echo "Deploy hook failed"; exit 1; }
+            echo "✅ Render deploy triggered."
+          else
+            echo "ℹ RENDER_DEPLOY_HOOK_URL secret not set — Render auto-deploys from its"
+            echo "  GitHub integration on push to main, so no manual trigger needed."
+          fi
+
+  # ──────────────────────────────────────────────
+  # Job 3 — Frontend (build + deploy to Vercel)
+  # ──────────────────────────────────────────────
+  deploy-frontend:
+    name: Deploy Frontend (Vercel)
+    runs-on: ubuntu-latest
+    needs: [deploy-contract, deploy-backend]
+    if: ${{ !failure() && !cancelled() }}
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build production bundle
+        run: npm run build
+        env:
+          CI: false
+          REACT_APP_API_URL: ${{ vars.REACT_APP_API_URL || 'https://fino-6e10.onrender.com/api' }}
+          REACT_APP_STELLAR_EXPLORER_URL: https://stellar.expert/explorer/testnet
+          REACT_APP_GOVERNANCE_ADDRESS: ${{ needs.deploy-contract.outputs.governance_id }}
+          REACT_APP_ADMIN_WALLET: ${{ vars.REACT_APP_ADMIN_WALLET || 'GBFONIF2XYE7HCJ5RUSRQRZCCCYGMPKM3XDMUKIQJJPZOAHUGJNDOZDG' }}
+
+      - name: Upload frontend build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: frontend/build
+          retention-days: 3
+
+      - name: Trigger Vercel deploy
+        env:
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ -n "$VERCEL_DEPLOY_HOOK_URL" ]; then
+            echo "▶ Triggering Vercel deploy (deploy hook)…"
+            code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$VERCEL_DEPLOY_HOOK_URL")
+            echo "Vercel deploy hook responded: HTTP $code"
+            [ "$code" = "200" ] || [ "$code" = "201" ] || { echo "Deploy hook failed"; exit 1; }
+            echo "✅ Vercel deploy triggered."
+          elif [ -n "$VERCEL_TOKEN" ]; then
+            echo "▶ Deploying to Vercel (CLI)…"
+            npx --yes vercel --prod --token "$VERCEL_TOKEN" --yes
+            echo "✅ Vercel deploy complete."
+          else
+            echo "ℹ No VERCEL_DEPLOY_HOOK_URL / VERCEL_TOKEN secret set — Vercel auto-deploys"
+            echo "  from its GitHub integration on push to main, so no manual trigger needed."
+          fi
+
+  # ──────────────────────────────────────────────
+  # Job 4 — Post-deploy smoke test
+  # ──────────────────────────────────────────────
+  smoke-test:
+    name: Post-Deploy Smoke Test
+    runs-on: ubuntu-latest
+    needs: [deploy-frontend]
+    if: ${{ !failure() && !cancelled() }}
+
+    steps:
+      - name: Wait for deployment to stabilise
+        run: sleep 20
+
+      - name: Check backend health
+        env:
+          API_URL: ${{ vars.REACT_APP_API_URL || 'https://fino-6e10.onrender.com/api' }}
+        run: |
+          echo "GET $API_URL/health"
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 "$API_URL/health" || echo "000")
+          echo "Backend health: HTTP $code"
+          # Informational only — a cold Render instance may still be waking up.
+          [ "$code" = "200" ] && echo "✅ backend healthy" || echo "⚠ backend not 200 (cold start?) — non-blocking"
+
+      - name: Check frontend responds
+        env:
+          DEPLOY_URL: ${{ vars.DEPLOY_URL || 'https://fino-srijon.vercel.app' }}
+        run: |
+          echo "GET $DEPLOY_URL"
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 "$DEPLOY_URL" || echo "000")
+          echo "Frontend: HTTP $code"
+          [ "$code" = "200" ] && echo "✅ frontend up" || echo "⚠ frontend not 200 yet — non-blocking"
