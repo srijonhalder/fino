@@ -475,6 +475,7 @@ The app integrates the [Freighter](https://freighter.app) browser wallet on **St
 ---
 
 ## 13. CI/CD Pipeline
+<img width="2834" height="1114" alt="Screenshot from 2026-07-17 21-46-25" src="https://github.com/user-attachments/assets/999b825d-1f48-44d5-8768-f00d96042a66" />
 
 Two GitHub Actions workflows in `.github/workflows/`:
 
